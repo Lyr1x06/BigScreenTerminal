@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+build/
+dist/
+ui_preview.*
+BigScreenTerminal-1.*.spec
