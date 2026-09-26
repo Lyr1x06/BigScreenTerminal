@@ -60,10 +60,21 @@ class FakeShell:
         self.calls = []
 
     def SHAppBarMessage(self, message, data):
+        if not data._obj.hWnd:
+            raise AssertionError("ABM_SETSTATE requires the taskbar HWND")
         self.calls.append(message)
         if message == ABM_SETSTATE:
             self.state = data._obj.lParam
         return self.state
+
+
+class FakeUser32:
+    hwnd = 123
+
+    def FindWindowW(self, class_name, title):
+        if class_name != "Shell_TrayWnd" or title is not None:
+            raise AssertionError("Expected the Windows taskbar window")
+        return self.hwnd
 
 
 class FakeRegistry:
@@ -96,7 +107,7 @@ class TaskbarTests(unittest.TestCase):
     def test_clears_only_auto_hide_and_detects_reenable(self):
         shell = FakeShell(ABS_AUTOHIDE | 2)
         registry = FakeRegistry()
-        guard = TaskbarAutoHideGuard(shell, registry)
+        guard = TaskbarAutoHideGuard(shell, registry, FakeUser32())
         self.assertTrue(guard.enforce())
         self.assertEqual(shell.state, 2)
         self.assertEqual(registry.value[8], 2)
@@ -106,6 +117,38 @@ class TaskbarTests(unittest.TestCase):
         registry.value = registry.value[:8] + bytes([3]) + registry.value[9:]
         self.assertTrue(guard.enforce())
         self.assertEqual(shell.calls.count(ABM_SETSTATE), 2)
+
+    def test_saved_setting_also_dispatches_windows_update(self):
+        shell = FakeShell(2)
+        registry = FakeRegistry()
+        guard = TaskbarAutoHideGuard(shell, registry, FakeUser32())
+        self.assertTrue(guard.enforce())
+        self.assertIn(ABM_SETSTATE, shell.calls)
+        self.assertEqual(registry.value[8], 2)
+
+    def test_recovers_after_explorer_restarts(self):
+        shell = FakeShell(3)
+        user32 = FakeUser32()
+        guard = TaskbarAutoHideGuard(shell, FakeRegistry(), user32)
+        user32.hwnd = 0
+        with self.assertRaises(OSError):
+            guard.enforce()
+        self.assertEqual(shell.calls, [])
+        user32.hwnd = 456
+        self.assertTrue(guard.enforce())
+        self.assertEqual(shell.state, 2)
+
+    def test_failed_windows_update_keeps_saved_setting_for_retry(self):
+        shell = FakeShell(3)
+        registry = FakeRegistry()
+        guard = TaskbarAutoHideGuard(shell, registry, FakeUser32())
+        original = shell.SHAppBarMessage
+        with patch.object(shell, "SHAppBarMessage", side_effect=lambda message, data:
+                          0 if message == ABM_SETSTATE else original(message, data)):
+            with self.assertRaises(OSError):
+                guard.enforce()
+        self.assertEqual(registry.value[8], 3)
+        self.assertTrue(guard.enforce())
 
 
 class UiTests(unittest.TestCase):

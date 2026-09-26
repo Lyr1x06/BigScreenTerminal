@@ -24,12 +24,12 @@ from make_icon import render_icon_pixmap
 from power import shutdown
 from schedule import ALL_DAYS, due_occurrence, next_occurrence, normalize_rule
 from settings import Settings
-from taskbar import TaskbarAutoHideGuard
+from taskbar import CHECK_INTERVAL_MS, TaskbarAutoHideGuard
 from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.5"
+VERSION = "2.0.6"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -292,7 +292,8 @@ class MainWindow(QMainWindow):
         if not self._selftest:
             self._taskbar_timer = QTimer(self)
             self._taskbar_timer.timeout.connect(self._check_taskbar)
-            self._taskbar_timer.start(300)
+            self._taskbar_timer.setTimerType(Qt.PreciseTimer)
+            self._taskbar_timer.start(CHECK_INTERVAL_MS)
             self._check_taskbar()
         if start_minimized and not self._selftest:
             QTimer.singleShot(0, self._show_tray_only)
