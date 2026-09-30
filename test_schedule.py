@@ -13,12 +13,19 @@ from PySide6.QtWidgets import QApplication
 import main
 import blackout
 import power
-from schedule import ALL_DAYS, due_occurrence, next_occurrence
+from schedule import ALL_DAYS, due_occurrence, next_occurrence, normalize_rule
 from settings import Settings
 from taskbar import ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, TaskbarAutoHideGuard
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_existing_rules_default_to_repeating(self):
+        rule = normalize_rule({"time": "22:00", "days": [0, 2]})
+        self.assertFalse(rule["once"])
+        rule["once"] = True
+        self.assertEqual(next_occurrence(rule, dt.datetime(2026, 9, 29, 12)),
+                         dt.datetime(2026, 9, 30, 22))
+
     def test_weekday_and_once_per_day(self):
         rule = {"id": "one", "time": "22:00", "days": [0, 2], "action": "blackout",
                 "enabled": True}
@@ -203,6 +210,50 @@ class UiTests(unittest.TestCase):
             self.window._on_tick()
             command.assert_not_called()
 
+    def test_one_shot_is_persisted_before_dispatch_and_survives_restart(self):
+        for action in ("blackout", "shutdown"):
+            with self.subTest(action=action):
+                self.window._add_default_rule()
+                row = self.window.schedule_rows[-1]
+                row.once_checkbox.setChecked(True)
+                row.action_combo.setCurrentIndex(row.action_combo.findData(action))
+                self.window._selftest = False
+                now = dt.datetime(2026, 9, 30, 22, 0, 10)
+
+                def dispatch(rule):
+                    saved = Settings(path=self.window.settings.path).schedule[-1]
+                    self.assertTrue(saved["once"])
+                    self.assertFalse(saved["enabled"])
+                    self.assertEqual(rule["action"], action)
+
+                with patch.object(self.window, "_run_rule", side_effect=dispatch) as run, \
+                        patch.object(main.datetime, "datetime") as datetime_mock:
+                    datetime_mock.now.return_value = now
+                    self.window._on_tick()
+                    self.window._on_tick()
+                    datetime_mock.now.return_value = now + dt.timedelta(days=7)
+                    self.window._on_tick()
+                    run.assert_called_once()
+                self.window._selftest = True
+                saved = Settings(path=self.window.settings.path).schedule[-1]
+                self.assertIsNone(due_occurrence(saved, now, set()))
+                self.assertIsNone(next_occurrence(saved, now))
+
+    def test_one_shot_save_failure_does_not_dispatch(self):
+        self.window._add_default_rule()
+        row = self.window.schedule_rows[0]
+        row.once_checkbox.setChecked(True)
+        self.window._selftest = False
+        due = dt.datetime(2026, 9, 30, 22, 0, 10)
+        with patch.object(self.window.settings, "save", return_value=False), \
+                patch.object(self.window, "_run_rule") as run, \
+                patch.object(main.datetime, "datetime") as datetime_mock:
+            datetime_mock.now.return_value = due
+            self.window._on_tick()
+            run.assert_not_called()
+        self.window._selftest = True
+        self.assertIn("保存失败", self.window.action_status.text())
+
     def test_blackout_covers_and_dismisses_screen(self):
         with patch.object(blackout, "keep_on_top") as enforce:
             self.window._show_blackout()
@@ -219,6 +270,34 @@ class UiTests(unittest.TestCase):
             QTest.keyClick(overlay, Qt.Key_Escape)
             self.assertFalse(self.window.blackout.active)
             self.assertFalse(self.window.blackout._topmost_timer.isActive())
+
+    def test_isolated_desktop_lifecycle(self):
+        with patch.object(self.app, "platformName", return_value="windows"), \
+                patch.object(blackout, "ScreenCoverDesktop") as desktop_class:
+            desktop = desktop_class.return_value
+            desktop.start.return_value = True
+            desktop.active = True
+            self.window._show_blackout()
+            self.assertTrue(self.window.blackout.active)
+            self.assertEqual(self.window.blackout.windows, [])
+            self.assertFalse(self.window.blackout._topmost_timer.isActive())
+            self.window.blackout.close()
+            desktop.close.assert_called_once()
+            self.assertFalse(self.window.blackout.active)
+
+    def test_isolated_desktop_failure_uses_cover_and_cleans_up_guard(self):
+        with patch.object(self.app, "platformName", return_value="windows"), \
+                patch.object(blackout, "ScreenCoverDesktop") as desktop_class, \
+                patch.object(blackout, "TopmostGuard") as guard_class, \
+                patch.object(blackout, "keep_on_top"):
+            desktop_class.return_value.start.return_value = False
+            self.window._show_blackout()
+            desktop_class.return_value.close.assert_called_once()
+            self.assertTrue(self.window.blackout.windows)
+            guard_class.return_value.start.assert_called_once()
+            self.window.blackout.close()
+            guard_class.return_value.stop.assert_called_once()
+            self.assertFalse(self.window.blackout.active)
 
     def test_titlebar_and_tray_toggle(self):
         self.assertTrue(self.window.windowFlags() & Qt.FramelessWindowHint)

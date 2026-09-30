@@ -31,6 +31,7 @@ def normalize_rule(value):
         "days": days,
         "action": action,
         "enabled": bool(value.get("enabled", True)),
+        "once": bool(value.get("once", False)),
     }
 
 

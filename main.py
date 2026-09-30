@@ -29,7 +29,7 @@ from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.6"
+VERSION = "2.0.7"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -174,9 +174,15 @@ class ScheduleRow(QFrame):
         days_row.addStretch()
         outer.addLayout(days_row)
 
+        self.once_checkbox = QCheckBox("仅执行一次")
+        self.once_checkbox.setChecked(rule.get("once", False))
+        self.once_checkbox.setToolTip("在下一次符合时间和星期的时刻执行，触发后自动停用。")
+        outer.addWidget(self.once_checkbox)
+
         self.time_edit.timeChanged.connect(self._changed)
         self.action_combo.currentIndexChanged.connect(self._changed)
         self.enabled_toggle.toggled.connect(self._changed)
+        self.once_checkbox.toggled.connect(self._changed)
         self._apply_dim()
 
     def _on_day_changed(self):
@@ -202,6 +208,7 @@ class ScheduleRow(QFrame):
             "days": [index for index, button in enumerate(self.day_buttons)
                      if button.isChecked()],
             "enabled": self.enabled_toggle.isChecked(),
+            "once": self.once_checkbox.isChecked(),
         }
 
 
@@ -394,9 +401,6 @@ class MainWindow(QMainWindow):
         black.setObjectName("primary")
         black.clicked.connect(self._show_blackout)
         layout.addWidget(black)
-        restore = QPushButton("退出关屏")
-        restore.clicked.connect(self.blackout.close)
-        layout.addWidget(restore)
         layout.addStretch()
         shut = QPushButton("立即关机")
         shut.setObjectName("danger")
@@ -423,7 +427,6 @@ class MainWindow(QMainWindow):
         for label, callback in (
             ("显示主窗口", self._show_main),
             ("立即关屏", self._show_blackout),
-            ("退出关屏", self.blackout.close),
             ("退出程序", self._quit),
         ):
             action = QAction(label, self)
@@ -563,6 +566,15 @@ class MainWindow(QMainWindow):
             key = due_occurrence(rule, now, self._fired)
             if key and not self._selftest:
                 self._fired.add(key)
+                if rule["once"]:
+                    row.enabled_toggle.blockSignals(True)
+                    row.enabled_toggle.setChecked(False)
+                    row.enabled_toggle.blockSignals(False)
+                    row.rule.update(row.to_rule())
+                    row._apply_dim()
+                    if not self._save_settings():
+                        self.action_status.setText("仅执行一次规则保存失败，本次未执行，请检查设置目录。")
+                        continue
                 self._run_rule(rule)
         self._update_next(now)
 
@@ -673,7 +685,7 @@ class MainWindow(QMainWindow):
             self.settings.data["geometry"] = [geo.x(), geo.y(), geo.width(), geo.height()]
         elif not self.isMinimized():
             self.settings.data["geometry"] = [self.x(), self.y(), self.width(), self.height()]
-        self.settings.save()
+        return self.settings.save()
 
     def _quit(self):
         self._quitting = True
@@ -703,7 +715,7 @@ def run_selftest():
         settings = Settings(path=os.path.join(directory, "settings.json"))
         settings.data["schedule"] = [{
             "id": "test", "time": "22:00", "days": ALL_DAYS,
-            "action": "blackout", "enabled": True,
+            "action": "blackout", "enabled": True, "once": False,
         }]
         assert settings.save()
         assert Settings(path=settings.path).schedule == settings.schedule
