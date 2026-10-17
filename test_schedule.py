@@ -267,9 +267,22 @@ class UiTests(unittest.TestCase):
             enforce.reset_mock()
             self.window.blackout._enforce_topmost()
             enforce.assert_called_with(overlay)
-            QTest.keyClick(overlay, Qt.Key_Escape)
+            for key in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Space):
+                QTest.keyClick(overlay, key)
+                self.assertTrue(self.window.blackout.active)
+            for button in (Qt.LeftButton, Qt.MiddleButton):
+                QTest.mouseClick(overlay, button)
+                self.assertTrue(self.window.blackout.active)
+            self.assertFalse(overlay.close())  # Alt+F4 / WM_CLOSE is ignored.
+            self.assertTrue(overlay.isVisible())
+            QTest.mouseClick(overlay, Qt.RightButton)
             self.assertFalse(self.window.blackout.active)
             self.assertFalse(self.window.blackout._topmost_timer.isActive())
+
+    def test_manual_shutdown_removed_and_startup_manager_available(self):
+        labels = [button.text() for button in self.window.findChildren(main.QPushButton)]
+        self.assertNotIn("立即关机", labels)
+        self.assertIn("开机启动项管理", labels)
 
     def test_isolated_desktop_lifecycle(self):
         with patch.object(self.app, "platformName", return_value="windows"), \

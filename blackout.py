@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Opaque cover windows on every display; click or press Esc to exit."""
+"""Opaque cover windows on every display; right-click to exit."""
 
 import ctypes
 import sys
@@ -129,13 +129,16 @@ class BlackScreen(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Space):
-            self.controller.close()
-        else:
-            super().keyPressEvent(event)
+        event.accept()
 
     def mousePressEvent(self, event):
-        self.controller.close()
+        if event.button() == Qt.RightButton:
+            self.controller.close()
+        event.accept()
+
+    def closeEvent(self, event):
+        # Ignore Alt+F4; controller.close() removes the window explicitly.
+        event.ignore()
 
 
 class BlackoutController(QObject):
@@ -195,7 +198,7 @@ class BlackoutController(QObject):
             self._native_guard.stop()
             self._native_guard = None
         for window in self.windows:
-            window.close()
+            window.hide()
             window.deleteLater()
         self.windows = []
 

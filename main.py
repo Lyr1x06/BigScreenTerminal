@@ -24,12 +24,14 @@ from make_icon import render_icon_pixmap
 from power import shutdown
 from schedule import ALL_DAYS, due_occurrence, next_occurrence, normalize_rule
 from settings import Settings
+from startup import StartupManager, StartupEntry
+from startup_dialog import StartupDialog
 from taskbar import CHECK_INTERVAL_MS, TaskbarAutoHideGuard
 from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.7"
+VERSION = "2.0.8"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -389,10 +391,10 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(11)
-        title = QLabel("屏幕与电源")
+        title = QLabel("屏幕与启动项")
         title.setObjectName("cardTitle")
         layout.addWidget(title)
-        description = QLabel("关屏时覆盖所有显示器，电脑保持运行。")
+        description = QLabel("关屏时覆盖所有显示器，电脑保持运行。\n仅鼠标右键退出关屏。")
         description.setObjectName("field")
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -402,10 +404,9 @@ class MainWindow(QMainWindow):
         black.clicked.connect(self._show_blackout)
         layout.addWidget(black)
         layout.addStretch()
-        shut = QPushButton("立即关机")
-        shut.setObjectName("danger")
-        shut.clicked.connect(self._confirm_shutdown)
-        layout.addWidget(shut)
+        startup = QPushButton("开机启动项管理")
+        startup.clicked.connect(self._show_startup_manager)
+        layout.addWidget(startup)
         self.taskbar_status = QLabel("任务栏自动隐藏监测中")
         self.taskbar_status.setObjectName("field")
         self.taskbar_status.setWordWrap(True)
@@ -609,15 +610,12 @@ class MainWindow(QMainWindow):
     def _show_blackout(self):
         self.blackout.show()
 
-    def _confirm_shutdown(self):
-        choice = QMessageBox.question(
-            self, APP_NAME, "现在关机？未保存的工作可能被其他程序阻止关机。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if choice == QMessageBox.Yes:
-            try:
-                shutdown()
-            except Exception as exc:
-                QMessageBox.warning(self, APP_NAME, f"关机失败：{exc}")
+    def _show_startup_manager(self):
+        StartupDialog(self).exec()
+        self.autostart_toggle.blockSignals(True)
+        self.autostart_toggle.setChecked(self.is_autostart())
+        self.autostart_toggle.blockSignals(False)
+        self._save_settings()
 
     def _check_taskbar(self):
         try:
@@ -652,6 +650,13 @@ class MainWindow(QMainWindow):
                         winreg.DeleteValue(key, STARTUP_REG_VALUE)
                     except FileNotFoundError:
                         pass
+            if enabled:
+                manager = StartupManager()
+                target, arguments = self._launcher()
+                manager.set_enabled(StartupEntry(
+                    STARTUP_REG_VALUE, self._startup_command(target, arguments),
+                    "当前用户 · 注册表", winreg.HKEY_CURRENT_USER, manager.native_view,
+                    "Run", STARTUP_REG_VALUE, None, value_type=winreg.REG_SZ), True)
             return True
         except OSError as exc:
             QMessageBox.warning(self, APP_NAME, f"设置开机自启动失败：{exc}")
@@ -660,10 +665,8 @@ class MainWindow(QMainWindow):
     @staticmethod
     def is_autostart():
         try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY) as key:
-                winreg.QueryValueEx(key, STARTUP_REG_VALUE)
-            return True
-        except FileNotFoundError:
+            return StartupManager().app_enabled(STARTUP_REG_VALUE)
+        except OSError:
             return False
 
     def _on_autostart_toggled(self, enabled):

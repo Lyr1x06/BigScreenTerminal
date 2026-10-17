@@ -95,11 +95,13 @@ class ScreenCoverDesktop:
             if message == 0x20:  # WM_SETCURSOR
                 set_cursor(None)
                 return 1
-            if message == 0x100 and wparam in (0x1B, 0x0D, 0x20):  # WM_KEYDOWN
+            if message == 0x204:  # WM_RBUTTONDOWN: the only user dismissal gesture
                 self._stop.set()
                 return 0
-            if message in (0x201, 0x204, 0x207, 0x10):  # Mouse button down / WM_CLOSE
-                self._stop.set()
+            if message in (0x100, 0x101, 0x104, 0x105, 0x10):
+                # Ignore keyboard input and WM_CLOSE (including Alt+F4).
+                return 0
+            if message == 0x112 and (wparam & 0xFFF0) == 0xF060:  # SC_CLOSE
                 return 0
             if message == 0x7E:  # WM_DISPLAYCHANGE
                 move(hwnd, *virtual_rect(), True)
