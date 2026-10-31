@@ -284,6 +284,15 @@ class UiTests(unittest.TestCase):
         self.assertNotIn("立即关机", labels)
         self.assertIn("开机启动项管理", labels)
 
+    def test_weather_check_ignores_disabled_and_non_shutdown_rules(self):
+        with patch.object(main, "WeatherWorker") as worker:
+            now = dt.datetime.now().replace(second=30, microsecond=0)
+            base = {"id": "weather", "time": now.strftime("%H:%M"),
+                    "days": [now.weekday()], "enabled": False, "once": False}
+            self.window._check_weather_before_shutdown({**base, "action": "shutdown"}, now)
+            self.window._check_weather_before_shutdown({**base, "enabled": True, "action": "blackout"}, now)
+            worker.assert_not_called()
+
     def test_isolated_desktop_lifecycle(self):
         with patch.object(self.app, "platformName", return_value="windows"), \
                 patch.object(blackout, "ScreenCoverDesktop") as desktop_class:

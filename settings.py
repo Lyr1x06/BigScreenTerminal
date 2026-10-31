@@ -13,6 +13,9 @@ DEFAULTS = {
     "autostart": False,
     "minimize_to_tray": True,
     "geometry": None,
+    "weather_enabled": True,
+    "weather_location": "",
+    "weather_temperature_threshold": 5.0,
 }
 
 
@@ -36,7 +39,8 @@ class Settings:
             return
         if not isinstance(loaded, dict):
             return
-        for key in ("autostart", "minimize_to_tray", "geometry"):
+        for key in ("autostart", "minimize_to_tray", "geometry", "weather_enabled",
+                    "weather_location", "weather_temperature_threshold"):
             if key in loaded:
                 self.data[key] = loaded[key]
         source = loaded.get("schedule")

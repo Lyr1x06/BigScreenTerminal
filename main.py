@@ -15,8 +15,9 @@ from PySide6.QtCore import Qt, QTime, QTimer, Signal, QPoint, QRect
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QComboBox, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
-    QSystemTrayIcon, QTimeEdit, QToolButton, QVBoxLayout, QWidget, QCheckBox,
+    QDoubleSpinBox, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QSystemTrayIcon, QTimeEdit, QToolButton, QVBoxLayout, QWidget,
+    QCheckBox,
 )
 
 from blackout import BlackoutController
@@ -27,11 +28,12 @@ from settings import Settings
 from startup import StartupManager, StartupEntry
 from startup_dialog import StartupDialog
 from taskbar import CHECK_INTERVAL_MS, TaskbarAutoHideGuard
+from weather import WeatherWorker
 from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.8"
+VERSION = "2.0.9"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -61,10 +63,10 @@ QFrame#panel { background: #214b75;
 QFrame#scheduleRow { background: #2b5985;
     border: 1px solid #5681aa; border-radius: 6px; }
 QFrame#scheduleRow[dimmed="true"] QLabel { color: #95b2ce; }
-QPushButton, QTimeEdit, QComboBox {
+QPushButton, QTimeEdit, QComboBox, QLineEdit, QDoubleSpinBox {
     background: #32628d; border: 1px solid #6593bc;
     border-radius: 6px; padding: 6px 10px; }
-QPushButton:hover, QTimeEdit:hover, QComboBox:hover {
+QPushButton:hover, QTimeEdit:hover, QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover {
     background: #3c78ac; border-color: #92c7ed; }
 QPushButton:pressed { background: #24557f; }
 QPushButton#primary { background: #73c5ff; color: #103754;
@@ -283,6 +285,9 @@ class MainWindow(QMainWindow):
         self.settings = settings or Settings()
         self.schedule_rows = []
         self._fired = set()
+        self._weather_started = set()
+        self._weather_workers = []
+        self._weather_alerts = []
         self.tray = None
         self.blackout = BlackoutController()
         self.taskbar_guard = TaskbarAutoHideGuard()
@@ -403,6 +408,36 @@ class MainWindow(QMainWindow):
         black.setObjectName("primary")
         black.clicked.connect(self._show_blackout)
         layout.addWidget(black)
+        weather_row = QHBoxLayout()
+        self.weather_toggle = QCheckBox("关机前天气提醒")
+        self.weather_toggle.setChecked(True)
+        self.weather_toggle.setToolTip("关机前一分钟检查今明两天天气；有明显温差或雨雪时弹窗提醒。")
+        self.weather_toggle.toggled.connect(self._on_weather_changed)
+        weather_row.addWidget(self.weather_toggle)
+        weather_row.addStretch()
+        layout.addLayout(weather_row)
+        location_row = QHBoxLayout()
+        location_row.addWidget(QLabel("位置"))
+        self.weather_location = QLineEdit()
+        self.weather_location.setPlaceholderText("城市（留空使用本机定位）")
+        self.weather_location.setToolTip("留空时优先使用 Windows 本机定位，失败后使用公网 IP 定位。")
+        self.weather_location.setClearButtonEnabled(True)
+        self.weather_location.textChanged.connect(self._on_weather_changed)
+        location_row.addWidget(self.weather_location, 1)
+        layout.addLayout(location_row)
+        threshold_row = QHBoxLayout()
+        threshold_row.addWidget(QLabel("温差阈值"))
+        self.weather_threshold = QDoubleSpinBox()
+        self.weather_threshold.setRange(1.0, 20.0)
+        self.weather_threshold.setSingleStep(0.5)
+        self.weather_threshold.setDecimals(1)
+        self.weather_threshold.setSuffix(" °C")
+        self.weather_threshold.setValue(5.0)
+        self.weather_threshold.setToolTip("明日与今日平均温度变化达到此数值时提醒。")
+        self.weather_threshold.valueChanged.connect(self._on_weather_changed)
+        threshold_row.addWidget(self.weather_threshold)
+        threshold_row.addStretch()
+        layout.addLayout(threshold_row)
         layout.addStretch()
         startup = QPushButton("开机启动项管理")
         startup.clicked.connect(self._show_startup_manager)
@@ -518,6 +553,19 @@ class MainWindow(QMainWindow):
             control.blockSignals(True)
             control.setChecked(checked)
             control.blockSignals(False)
+        self.weather_toggle.blockSignals(True)
+        self.weather_toggle.setChecked(bool(self.settings.data.get("weather_enabled", True)))
+        self.weather_toggle.blockSignals(False)
+        self.weather_location.blockSignals(True)
+        self.weather_location.setText(str(self.settings.data.get("weather_location", "") or ""))
+        self.weather_location.blockSignals(False)
+        self.weather_threshold.blockSignals(True)
+        try:
+            threshold = float(self.settings.data.get("weather_temperature_threshold", 5.0))
+        except (TypeError, ValueError):
+            threshold = 5.0
+        self.weather_threshold.setValue(max(1.0, min(20.0, threshold)))
+        self.weather_threshold.blockSignals(False)
         geometry = self.settings.data.get("geometry")
         if isinstance(geometry, list) and len(geometry) == 4:
             try:
@@ -559,11 +607,15 @@ class MainWindow(QMainWindow):
         self._save_settings()
         self._update_next(datetime.datetime.now())
 
+    def _on_weather_changed(self, *_):
+        self._save_settings()
+
     def _on_tick(self):
         now = datetime.datetime.now()
         self.clock_label.setText(now.strftime("%H:%M:%S"))
         for row in tuple(self.schedule_rows):
             rule = row.to_rule()
+            self._check_weather_before_shutdown(rule, now)
             key = due_occurrence(rule, now, self._fired)
             if key and not self._selftest:
                 self._fired.add(key)
@@ -578,6 +630,53 @@ class MainWindow(QMainWindow):
                         continue
                 self._run_rule(rule)
         self._update_next(now)
+
+    def _check_weather_before_shutdown(self, rule, now):
+        if (self._selftest or not self.weather_toggle.isChecked()
+                or not rule["enabled"] or rule["action"] != "shutdown"):
+            return
+        hour, minute = map(int, rule["time"].split(":"))
+        scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        remaining = (scheduled - now).total_seconds()
+        if not 0 <= remaining <= 60:
+            return
+        key = f"{rule['id']}:{scheduled.date().isoformat()}"
+        if key in self._weather_started:
+            return
+        self._weather_started.add(key)
+        worker = WeatherWorker(self.weather_location.text().strip(), parent=self)
+        worker.completed.connect(lambda report, w=worker: self._weather_completed(w, report))
+        worker.failed.connect(lambda error, w=worker: self._weather_failed(w, error))
+        self._weather_workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._weather_worker_finished(w))
+        worker.start()
+
+    def _weather_worker_finished(self, worker):
+        if worker in self._weather_workers:
+            self._weather_workers.remove(worker)
+        worker.deleteLater()
+
+    def _weather_completed(self, worker, report):
+        if report.needs_reminder(self.weather_threshold.value()):
+            message = QMessageBox(self)
+            message.setWindowTitle("关机前天气提醒")
+            message.setIcon(QMessageBox.Information)
+            message.setText(report.message(self.weather_threshold.value()))
+            message.setStandardButtons(QMessageBox.Ok)
+            message.setAttribute(Qt.WA_DeleteOnClose)
+            message.show()
+            self._weather_alerts.append(message)
+            message.finished.connect(lambda *_: self._forget_weather_alert(message))
+
+    def _forget_weather_alert(self, message):
+        if message in self._weather_alerts:
+            self._weather_alerts.remove(message)
+
+    def _weather_failed(self, worker, error):
+        self.action_status.setText(f"天气提醒检查失败：{error}")
+        self.action_status.setObjectName("statusErr")
+        self.action_status.style().unpolish(self.action_status)
+        self.action_status.style().polish(self.action_status)
 
     def _update_next(self, now):
         upcoming = []
@@ -683,6 +782,9 @@ class MainWindow(QMainWindow):
         self.settings.data["schedule"] = [row.to_rule() for row in self.schedule_rows]
         self.settings.data["autostart"] = self.autostart_toggle.isChecked()
         self.settings.data["minimize_to_tray"] = self.tray_toggle.isChecked()
+        self.settings.data["weather_enabled"] = self.weather_toggle.isChecked()
+        self.settings.data["weather_location"] = self.weather_location.text().strip()
+        self.settings.data["weather_temperature_threshold"] = self.weather_threshold.value()
         if self._custom_maximized and self._restore_geometry is not None:
             geo = self._restore_geometry
             self.settings.data["geometry"] = [geo.x(), geo.y(), geo.width(), geo.height()]
@@ -692,6 +794,9 @@ class MainWindow(QMainWindow):
 
     def _quit(self):
         self._quitting = True
+        for worker in tuple(self._weather_workers):
+            if worker.isRunning():
+                worker.wait(1000)
         self.blackout.close()
         self._save_settings()
         if self.tray is not None:
