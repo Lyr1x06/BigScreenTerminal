@@ -33,7 +33,7 @@ from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.9"
+VERSION = "2.0.10"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -438,6 +438,10 @@ class MainWindow(QMainWindow):
         threshold_row.addWidget(self.weather_threshold)
         threshold_row.addStretch()
         layout.addLayout(threshold_row)
+        self.weather_now_button = QPushButton("立即查看天气")
+        self.weather_now_button.setToolTip("立即查询本机位置或指定城市的今明两天天气。")
+        self.weather_now_button.clicked.connect(self._check_weather_now)
+        layout.addWidget(self.weather_now_button)
         layout.addStretch()
         startup = QPushButton("开机启动项管理")
         startup.clicked.connect(self._show_startup_manager)
@@ -658,15 +662,41 @@ class MainWindow(QMainWindow):
 
     def _weather_completed(self, worker, report):
         if report.needs_reminder(self.weather_threshold.value()):
-            message = QMessageBox(self)
-            message.setWindowTitle("关机前天气提醒")
-            message.setIcon(QMessageBox.Information)
-            message.setText(report.message(self.weather_threshold.value()))
-            message.setStandardButtons(QMessageBox.Ok)
-            message.setAttribute(Qt.WA_DeleteOnClose)
-            message.show()
-            self._weather_alerts.append(message)
-            message.finished.connect(lambda *_: self._forget_weather_alert(message))
+            self._show_weather_report(report, "关机前天气提醒")
+
+    def _check_weather_now(self):
+        if any(worker.isRunning() for worker in self._weather_workers):
+            return
+        self.weather_now_button.setEnabled(False)
+        self.weather_now_button.setText("查询中…")
+        worker = WeatherWorker(self.weather_location.text().strip(), parent=self)
+        worker.completed.connect(lambda report, w=worker: self._weather_manual_completed(w, report))
+        worker.failed.connect(lambda error, w=worker: self._weather_manual_failed(w, error))
+        worker.finished.connect(lambda w=worker: self._weather_manual_finished(w))
+        self._weather_workers.append(worker)
+        worker.start()
+
+    def _weather_manual_completed(self, worker, report):
+        self._show_weather_report(report, "天气查询结果")
+
+    def _weather_manual_failed(self, worker, error):
+        QMessageBox.warning(self, "天气查询失败", error)
+
+    def _weather_manual_finished(self, worker):
+        self._weather_worker_finished(worker)
+        self.weather_now_button.setEnabled(True)
+        self.weather_now_button.setText("立即查看天气")
+
+    def _show_weather_report(self, report, title):
+        message = QMessageBox(self)
+        message.setWindowTitle(title)
+        message.setIcon(QMessageBox.Information)
+        message.setText(report.message(self.weather_threshold.value()))
+        message.setStandardButtons(QMessageBox.Ok)
+        message.setAttribute(Qt.WA_DeleteOnClose)
+        message.show()
+        self._weather_alerts.append(message)
+        message.finished.connect(lambda *_: self._forget_weather_alert(message))
 
     def _forget_weather_alert(self, message):
         if message in self._weather_alerts:

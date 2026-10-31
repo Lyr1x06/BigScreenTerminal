@@ -106,7 +106,7 @@ class WeatherReport:
             reasons.append(f"日均温差约 {self.temperature_change:.1f}°C")
         if self.has_rain_or_snow:
             reasons.append("明天有雨雪或明显降水")
-        reason = "、".join(reasons) or "天气变化提醒"
+        reason = "、".join(reasons) or "未来两天天气变化不大"
         precipitation = f"，降水 {self.tomorrow_precipitation:.1f} mm" \
             if self.tomorrow_precipitation > 0 else ""
         snowfall = f"，降雪 {self.tomorrow_snowfall:.1f} cm" \

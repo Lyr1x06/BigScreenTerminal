@@ -2,7 +2,7 @@ import datetime as dt
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -292,6 +292,16 @@ class UiTests(unittest.TestCase):
             self.window._check_weather_before_shutdown({**base, "action": "shutdown"}, now)
             self.window._check_weather_before_shutdown({**base, "enabled": True, "action": "blackout"}, now)
             worker.assert_not_called()
+
+    def test_manual_weather_button_starts_background_lookup(self):
+        self.assertEqual(self.window.weather_now_button.text(), "立即查看天气")
+        worker = Mock()
+        worker.isRunning.return_value = False
+        with patch.object(main, "WeatherWorker", return_value=worker):
+            self.window._check_weather_now()
+        worker.start.assert_called_once()
+        self.assertFalse(self.window.weather_now_button.isEnabled())
+        self.window._weather_workers.clear()
 
     def test_isolated_desktop_lifecycle(self):
         with patch.object(self.app, "platformName", return_value="windows"), \
