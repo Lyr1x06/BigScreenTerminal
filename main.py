@@ -29,11 +29,12 @@ from startup import StartupManager, StartupEntry
 from startup_dialog import StartupDialog
 from taskbar import CHECK_INTERVAL_MS, TaskbarAutoHideGuard
 from weather import WeatherWorker
+from weather_dialog import WeatherDialog
 from window_effects import disable_native_border, set_window_rounding
 
 
 APP_NAME = "大屏控制终端"
-VERSION = "2.0.10"
+VERSION = "2.0.11"
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_VALUE = "BigScreenTerminal"
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -688,12 +689,7 @@ class MainWindow(QMainWindow):
         self.weather_now_button.setText("立即查看天气")
 
     def _show_weather_report(self, report, title):
-        message = QMessageBox(self)
-        message.setWindowTitle(title)
-        message.setIcon(QMessageBox.Information)
-        message.setText(report.message(self.weather_threshold.value()))
-        message.setStandardButtons(QMessageBox.Ok)
-        message.setAttribute(Qt.WA_DeleteOnClose)
+        message = WeatherDialog(report, title, self.weather_threshold.value(), self)
         message.show()
         self._weather_alerts.append(message)
         message.finished.connect(lambda *_: self._forget_weather_alert(message))

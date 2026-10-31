@@ -63,6 +63,22 @@ RAIN_CODES = set(range(51, 68)) | {80, 81, 82, 95, 96, 99}
 SNOW_CODES = set(range(71, 78)) | {85, 86}
 
 
+def weather_symbol(code):
+    if code in {95, 96, 99}:
+        return "ϟ"
+    if code in SNOW_CODES:
+        return "❄"
+    if code in RAIN_CODES:
+        return "☂"
+    if code in {45, 48}:
+        return "≋"
+    if code in {1, 2}:
+        return "◐"
+    if code == 3:
+        return "☁"
+    return "☀"
+
+
 @dataclass(frozen=True)
 class WeatherReport:
     location: str
@@ -75,6 +91,7 @@ class WeatherReport:
     tomorrow_code: int
     tomorrow_precipitation: float
     tomorrow_snowfall: float
+    today_code: int = 0
 
     @property
     def today_average(self):
@@ -91,6 +108,10 @@ class WeatherReport:
     @property
     def tomorrow_label(self):
         return WEATHER_LABELS.get(self.tomorrow_code, "天气变化")
+
+    @property
+    def today_label(self):
+        return WEATHER_LABELS.get(self.today_code, "天气变化")
 
     @property
     def has_rain_or_snow(self):
@@ -183,7 +204,7 @@ class WeatherClient:
             number("temperature_2m_min", today_index), number("temperature_2m_max", today_index),
             number("temperature_2m_min", tomorrow_index), number("temperature_2m_max", tomorrow_index),
             tomorrow_code, number("precipitation_sum", tomorrow_index),
-            number("snowfall_sum", tomorrow_index),
+            number("snowfall_sum", tomorrow_index), int(codes[today_index]),
         )
 
 

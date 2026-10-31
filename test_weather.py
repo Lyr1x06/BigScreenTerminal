@@ -8,6 +8,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from weather import WeatherClient, WeatherReport, native_location
+from weather_dialog import WeatherDialog
 
 
 class Response:
@@ -34,6 +35,18 @@ class WeatherTests(unittest.TestCase):
         dry = WeatherReport("济南", today, today + dt.timedelta(days=1),
                             15, 20, 16, 21, 0, 0.0, 0.0)
         self.assertFalse(dry.needs_reminder(5))
+
+    def test_weather_dialog_has_large_cards_and_both_days(self):
+        today = dt.date(2026, 10, 31)
+        report = WeatherReport("济南", today, today + dt.timedelta(days=1),
+                               15, 20, 7, 13, 61, 2.0, 0.0, today_code=2)
+        dialog = WeatherDialog(report)
+        self.assertGreaterEqual(dialog.width(), 700)
+        labels = [label.text() for label in dialog.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)]
+        self.assertIn("今天", labels)
+        self.assertIn("明天", labels)
+        self.assertIn("小雨", labels)
+        dialog.close()
 
     def test_fetch_uses_city_geocoding_and_two_day_daily_values(self):
         responses = [
